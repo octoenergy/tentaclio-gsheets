@@ -1,0 +1,137 @@
+---
+# Python CircleCI 2.0 configuration file
+#
+# INFO: Check CircleCI documentation for more details
+#       https://circleci.com/docs/2.0/language-python/
+
+version: 2.1
+
+executors:
+  standard:
+    docker:
+      - image: circleci/python:3.9
+        environment:
+          PIPENV_VENV_IN_PROJECT: true
+    working_directory: "~/lib"
+
+# -----------------
+# Reusable commands
+# -----------------
+
+commands:
+  configure_github:
+    steps:
+      - run:
+          name: Configure Github access
+          command: |
+            git config --global --unset url.ssh://git@github.com.insteadof;\
+            echo https://${GITHUB_TOKEN}:@github.com > ~/.git-credentials
+            git config --global credential.helper store
+
+  checkout_source:
+    steps:
+      - restore_cache:
+          keys:
+            - source-{{ .Branch }}-{{ .Revision }}
+            - source-{{ .Branch }}-
+            - source-
+      - checkout
+      - save_cache:
+          key: source-{{ .Branch }}-{{ .Revision }}
+          paths:
+            - "./.git"
+
+  install_unixodbc:
+    steps:
+      - run:
+          name: Instal UnixODBC
+          command: |
+            sudo apt-get install unixodbc-dev -y
+
+  update_virtualenv:
+    steps:
+      - restore_cache:
+          keys:
+            - virtualenv-{{ .Environment.CACHE_VERSION }}-{{ .Branch }}-{{ checksum "Pipfile.lock" }}
+            - virtualenv-{{ .Environment.CACHE_VERSION }}-{{ .Branch }}-
+            - virtualenv-{{ .Environment.CACHE_VERSION }}-
+      - configure_github
+      - install_unixodbc
+      - run:
+          name: Install Python packages
+          command: make sync
+      - save_cache:
+          key: virtualenv-{{ .Environment.CACHE_VERSION }}-{{ .Branch }}-{{ checksum "Pipfile.lock" }}
+          paths:
+            - "./.venv"
+
+jobs:
+  lint:
+    executor: standard
+    steps:
+      - checkout_source
+      - update_virtualenv
+      - run:
+          name: Run Python linter
+          command: make lint
+
+  test:
+    executor: standard
+    steps:
+      - checkout_source
+      - update_virtualenv
+      - run:
+          name: Run Python unit tests
+          command: make test
+
+  release:
+    executor: standard
+    steps:
+      - checkout_source
+      - update_virtualenv
+      - restore_cache:
+          keys:
+            - pip-cache-{{ .Environment.CACHE_VERSION }}-{{ .Branch }}-{{ checksum "Pipfile.lock" }}
+            - pip-cache-{{ .Environment.CACHE_VERSION }}-{{ .Branch }}-
+            - pip-cache-{{ .Environment.CACHE_VERSION }}-
+      - run:
+          name: Verify git tag vs. version
+          command: |
+            python3 -m venv venv
+            . venv/bin/activate
+            python setup.py verify
+      - run:
+          name: Init .pypirc
+          command: |
+            echo -e "[pypi]" >> ~/.pypirc
+            echo -e "username = octoenergy" >> ~/.pypirc
+            echo -e "password = $PYPI_PASSWORD" >> ~/.pypirc
+      - run:
+          name: Create release
+          command: |
+            make release
+
+workflows:
+  version: 2
+
+  test-build-deploy:
+    jobs:
+      - lint:
+          filters:
+            tags:
+              only: /.*/
+      - test:
+          filters:
+            tags:
+              only: /.*/
+      - release:
+          requires:
+            - lint
+            - test
+          filters:
+            tags:
+              only: /[0-9]+(\.[0-9]+)*(-alpha\.[0-9]+)?/
+            branches:
+              ignore: /.*/
+          context:
+            TENTACLIO
