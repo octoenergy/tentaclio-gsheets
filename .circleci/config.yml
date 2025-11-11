@@ -35,7 +35,8 @@ commands:
             - source-{{ .Branch }}-{{ .Revision }}
             - source-{{ .Branch }}-
             - source-
-      - checkout
+      - checkout:
+          method: full
       - save_cache:
           key: source-{{ .Branch }}-{{ .Revision }}
           paths:
